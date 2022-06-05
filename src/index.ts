@@ -1,4 +1,5 @@
 import parseRange from "range-parser";
+import mime from "mime";
 
 interface Env {
   R2_BUCKET: R2Bucket,
@@ -130,7 +131,7 @@ export default {
           "last-modified": file.uploaded.toUTCString(),
 
           "content-encoding": file.httpMetadata?.contentEncoding ?? "",
-          "content-type": file.httpMetadata?.contentType ?? "application/octet-stream",
+          "content-type": file.httpMetadata?.contentType ?? (mime.getType(file.key) || "application/octet-stream"),
           "content-language": file.httpMetadata?.contentLanguage ?? "",
           "content-disposition": file.httpMetadata?.contentDisposition ?? "",
           "content-range": range ? getRangeHeader(range, file.size) : "",
