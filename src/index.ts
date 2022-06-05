@@ -3,6 +3,7 @@ import mime from "mime";
 
 interface Env {
   R2_BUCKET: R2Bucket,
+  AUTH_SECRET?: string,
   CACHE_CONTROL?: string
 }
 
@@ -21,18 +22,57 @@ function getRangeHeader(range: ParsedRange, fileSize: number): string {
     (range.offset + range.length - 1)}/${fileSize}`;
 }
 
+function canWrite(request: Request, env: Env): boolean {
+  if (!request.headers.get('Authorization') || !env.AUTH_SECRET) {
+    return false;
+  }
+
+  const authorization = request.headers.get('Authorization') ?? "";
+  const [scheme, encoded] = authorization.split(' ');
+  // The Authorization header must start with Basic, followed by a space.
+  if (!encoded || scheme !== 'Basic') {
+    return false;
+  }
+  // Decodes the base64 value and performs unicode normalization.
+  // @see https://datatracker.ietf.org/doc/html/rfc7613#section-3.3.2 (and #section-4.2.2)
+  // @see https://dev.mozilla.org/docs/Web/JavaScript/Reference/Global_Objects/String/normalize
+  const buffer = Uint8Array.from(atob(encoded), character => character.charCodeAt(0));
+  const decoded = new TextDecoder().decode(buffer).normalize();
+
+  // Allow the secret to appear in user or pass. Just so long as it's in there.
+  return decoded.includes(env.AUTH_SECRET);
+}
+
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+    const url = new URL(request.url);
+    if ('https:' !== url.protocol || 'https' !== request.headers.get('x-forwarded-proto')) {
+      return new Response("Must use HTTPS", { status: 401 });
+    }
+
+    let path = decodeURIComponent(url.pathname.substring(1));
+    if (path.length > 0 && path.slice(-1) == '/') {
+      console.warn("Appending index.html to", path);
+      path += "index.html";
+    }
+
+    if (canWrite(request, env)) {
+      console.info("Authenticated", request.method, "request to", path);
+      switch (request.method) {
+        case "PUT":
+          await env.R2_BUCKET.put(path, request.body);
+          return new Response(`Uploaded ${path}`);
+        case "DELETE":
+          await env.R2_BUCKET.delete(path);
+          return new Response(`Deleted ${path}`, { status: 200 });
+      }
+    }
+
     const allowedMethods = ["GET", "HEAD", "OPTIONS"];
     if (allowedMethods.indexOf(request.method) === -1) return new Response("Method Not Allowed", { status: 405 });
 
     if (request.method === "OPTIONS") {
       return new Response(null, { headers: { "allow": allowedMethods.join(", ") } })
-    }
-
-    const url = new URL(request.url);
-    if (url.pathname === "/") {
-      return new Response("OK");
     }
 
     const cache = caches.default;
@@ -42,11 +82,9 @@ export default {
     let range: ParsedRange | undefined;
 
     if (!response || !response.ok) {
-      let path = decodeURIComponent(url.pathname.substring(1));
       console.warn("Cache miss on", path);
-      if (path.length > 0 && path.slice(-1) == '/') {
-        console.warn("Appending index.html to", path);
-        path += "index.html";
+      if (url.pathname === "/" || url.pathname == "/index.html") {
+        return new Response("OK");
       }
 
       let file: R2Object | R2ObjectBody | null | undefined;
