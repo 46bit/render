@@ -42,8 +42,12 @@ export default {
     let range: ParsedRange | undefined;
 
     if (!response || !response.ok) {
-      console.warn("Cache miss");
-      const path = decodeURIComponent(url.pathname.substring(1));
+      let path = decodeURIComponent(url.pathname.substring(1));
+      console.warn("Cache miss on", path);
+      if (path.length > 0 && path.slice(-1) == '/') {
+        console.warn("Appending index.html to", path);
+        path += "index.html";
+      }
 
       let file: R2Object | R2ObjectBody | null | undefined;
 
